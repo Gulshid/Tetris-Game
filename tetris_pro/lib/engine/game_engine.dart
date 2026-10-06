@@ -66,6 +66,38 @@ class GameEngine extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
+  // ---------------------------------------------------------------------
+  // Player actions (Phase 4)
+  // ---------------------------------------------------------------------
+
+  /// Tries to shift the piece by [dx] columns (-1 left, +1 right).
+  /// Returns true if the piece moved.
+  bool move(int dx) {
+    if (!_isActive) return false;
+    return _applyIfFree(_current!.shifted(dx, 0));
+  }
+
+  /// Tries to rotate the piece: +1 clockwise, -1 counter-clockwise.
+  /// Plain rotation with no wall kicks yet; SRS kicks arrive in Phase 8.
+  /// Returns true if the piece rotated.
+  bool rotate(int direction) {
+    if (!_isActive) return false;
+    final piece = _current!;
+    return _applyIfFree(piece.copyWith(rotation: piece.rotation + direction));
+  }
+
+  /// Commits [candidate] as the current piece if it fits on the board.
+  bool _applyIfFree(Piece candidate) {
+    if (_board.collides(candidate)) return false;
+    _current = candidate;
+    notifyListeners();
+    return true;
+  }
+
+  // ---------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------
+
   /// One fixed simulation step. Returns true if visible state changed.
   bool _step(double dt) {
     _gravityTimer += dt;
