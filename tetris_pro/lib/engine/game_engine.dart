@@ -40,6 +40,29 @@ class GameEngine extends ChangeNotifier {
   /// Successful moves/rotations that may restart the lock timer per piece.
   static const int maxLockResets = 15;
 
+  // Phase 9: DAS / ARR and levels
+  /// Default Delayed Auto Shift: seconds a direction is held before it repeats.
+  static const double defaultDas = 0.16;
+
+  /// Default Auto Repeat Rate: seconds between repeated moves once DAS is done.
+  /// 0 means "slide to the wall instantly".
+  static const double defaultArr = 0.04;
+
+  /// Lines needed to gain one level.
+  static const int linesPerLevel = 10;
+
+  /// Fastest natural fall (seconds per row).
+  static const double minGravityInterval = 0.002;
+
+  /// Guideline-style gravity curve: seconds per row at [level] (1-based).
+  /// `(0.8 - (level - 1) * 0.007) ^ (level - 1)`, never below
+  /// [minGravityInterval]. Level 1 is exactly 1.0 s per row.
+  static double gravityForLevel(int level) {
+    final l = math.max(level, 1);
+    final base = math.max(0.8 - (l - 1) * 0.007, 0.0);
+    return math.max(math.pow(base, l - 1).toDouble(), minGravityInterval);
+  }
+
   final PieceGenerator _generator;
 
   Board _board = Board.empty();
@@ -62,8 +85,26 @@ class GameEngine extends ChangeNotifier {
   int _lowestY = 0;
   bool _lastActionWasRotation = false;
 
-  /// Seconds per row of natural fall. Levels change this in Phase 9.
-  double gravityInterval = 1.0;
+  // Horizontal auto-repeat state.
+  bool _leftHeld = false;
+  bool _rightHeld = false;
+  int _dir = 0; // -1 left, 0 none, +1 right (the most recently pressed key)
+  double _dasTimer = 0;
+  double _arrTimer = 0;
+  bool _dasCharged = false;
+
+  /// Delay before a held direction starts repeating (seconds). Tunable so a
+  /// settings screen can change it later.
+  double das = defaultDas;
+
+  /// Seconds between repeated moves after DAS. 0 = instant slide.
+  double arr = defaultArr;
+
+  /// Current level: one more for every [linesPerLevel] lines.
+  int get level => _lines ~/ linesPerLevel + 1;
+
+  /// Seconds per row of natural fall at the current level.
+  double get gravityInterval => gravityForLevel(level);
 
   Board get board => _board;
   Piece? get current => _current;
@@ -128,8 +169,21 @@ class GameEngine extends ChangeNotifier {
     _score = 0;
     _accumulator = 0;
     _gravityTimer = 0;
+    releaseInputs();
     _phase = GamePhase.playing;
     _spawn();
+    notifyListeners();
+  }
+
+  /// Pauses a running game or resumes a paused one. Ignored in other phases.
+  void togglePause() {
+    if (_phase == GamePhase.playing) {
+      _phase = GamePhase.paused;
+    } else if (_phase == GamePhase.paused) {
+      _phase = GamePhase.playing;
+    } else {
+      return;
+    }
     notifyListeners();
   }
 
@@ -216,6 +270,89 @@ class GameEngine extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------
+  // Phase 9: held direction keys (DAS / ARR)
+  // ---------------------------------------------------------------------
+
+  /// A direction key went down ([direction] is -1 or +1). Moves one column
+  /// immediately; after [das] seconds the piece keeps moving every [arr].
+  /// Pressing the opposite key takes over; releasing it resumes the first.
+  void setDir(int direction) {
+    if (direction == 0) return;
+    if (direction < 0) {
+      _leftHeld = true;
+    } else {
+      _rightHeld = true;
+    }
+    final d = direction.sign;
+    if (_dir == d) return; // already repeating this way
+    _dir = d;
+    _dasTimer = 0;
+    _arrTimer = 0;
+    _dasCharged = false;
+    move(d);
+  }
+
+  /// The direction key went up.
+  void releaseDir(int direction) {
+    if (direction < 0) {
+      _leftHeld = false;
+    } else if (direction > 0) {
+      _rightHeld = false;
+    }
+    if (_dir != direction.sign) return;
+    final other = _leftHeld ? -1 : (_rightHeld ? 1 : 0);
+    _dir = other;
+    _arrTimer = 0;
+    // The other key has been down a while, so it keeps sliding right away.
+    _dasCharged = other != 0;
+    _dasTimer = other != 0 ? das : 0;
+  }
+
+  /// Forgets every held key. Called on restart and when the window loses
+  /// focus, so a missed key-up can never leave the piece sliding by itself.
+  void releaseInputs() {
+    _leftHeld = false;
+    _rightHeld = false;
+    _dir = 0;
+    _dasTimer = 0;
+    _arrTimer = 0;
+    _dasCharged = false;
+    _softDrop = false;
+  }
+
+  /// Advances the auto-repeat by [dt]. Returns true if the piece moved.
+  bool _applyDas(double dt) {
+    if (_dir == 0) return false;
+    if (!_dasCharged) {
+      _dasTimer += dt;
+      if (_dasTimer < das) return false;
+      _dasCharged = true;
+      // First repeat fires the moment DAS completes; carry the overshoot.
+      _arrTimer = arr + (_dasTimer - das);
+    } else {
+      _arrTimer += dt;
+    }
+
+    var moved = false;
+    if (arr <= 0) {
+      while (move(_dir)) {
+        moved = true;
+      }
+      _arrTimer = 0;
+      return moved;
+    }
+    while (_arrTimer >= arr) {
+      _arrTimer -= arr;
+      if (!move(_dir)) {
+        _arrTimer = arr; // blocked: stay ready for the moment it frees up
+        break;
+      }
+      moved = true;
+    }
+    return moved;
+  }
+
+  // ---------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------
 
@@ -242,11 +379,13 @@ class GameEngine extends ChangeNotifier {
 
   /// One fixed simulation step. Returns true if visible state changed.
   bool _step(double dt) {
+    final slid = _applyDas(dt);
+
     // Resting on something: no gravity, count down the lock delay instead.
     if (_isGrounded) {
       _gravityTimer = 0;
       _lockTimer += dt;
-      if (_lockTimer < lockDelay) return false;
+      if (_lockTimer < lockDelay) return slid;
       _lockPiece();
       return true;
     }
@@ -260,7 +399,7 @@ class GameEngine extends ChangeNotifier {
       moved = true;
       if (_softDrop) _score += softDropPointsPerRow;
     }
-    return moved;
+    return moved || slid;
   }
 
   /// Spawns [type], or the next piece from the generator.
