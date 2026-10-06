@@ -3,7 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import 'core/responsive/design_size.dart';
-import 'features/game/presentation/debug_page.dart';
+import 'core/theme/game_colors.dart';
+import 'features/game/presentation/game_page.dart';
 
 class TetrisProApp extends StatelessWidget {
   const TetrisProApp({super.key});
@@ -20,7 +21,7 @@ class TetrisProApp extends StatelessWidget {
             title: 'Tetris Pro',
             debugShowCheckedModeBanner: false,
             theme: ThemeData.dark(useMaterial3: true).copyWith(
-              scaffoldBackgroundColor: const Color(0xFF0B0E1A),
+              scaffoldBackgroundColor: GameColors.background,
             ),
             builder: (ctx, child) {
               SystemChrome.setSystemUIOverlayStyle(
@@ -32,7 +33,7 @@ class TetrisProApp extends StatelessWidget {
               );
               return child!;
             },
-            home: const DebugPage(),
+            home: const GamePage(),
           ),
         );
       },

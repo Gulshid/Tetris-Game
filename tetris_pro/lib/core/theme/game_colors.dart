@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:tetris_pro/engine/tetromino.dart';
 
-import '../../engine/engine.dart';
 
 /// Neon piece colors in piece order: I, O, T, S, Z, J, L.
 const List<Color> pieceColors = [
