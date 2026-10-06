@@ -89,8 +89,8 @@ class _GamePageState extends State<GamePage>
                 Expanded(child: _playfield()),
                 SizedBox(height: 8.h),
                 Text(
-                  '← →  move    ↓  step    ↑ / X  rotate    Z  rotate back\n'
-                  'C  hold    R  restart',
+                  '← →  move    ↓  soft drop    Space  hard drop\n'
+                  '↑ / X  rotate    Z  rotate back    C  hold    R  restart',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: GameColors.textDim, fontSize: 11.sp),
                 ),
@@ -152,8 +152,13 @@ class _GamePageState extends State<GamePage>
           SizedBox(height: 16.h),
           ListenableBuilder(
             listenable: _engine,
-            builder: (_, __) =>
+            builder: (_, __) => Column(
+              children: [
+                StatTile(label: 'SCORE', value: '${_engine.score}'),
+                SizedBox(height: 12.h),
                 StatTile(label: 'LINES', value: '${_engine.lines}'),
+              ],
+            ),
           ),
         ],
       );
