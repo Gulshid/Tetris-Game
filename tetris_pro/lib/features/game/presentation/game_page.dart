@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -7,6 +9,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../../core/theme/game_colors.dart';
 import '../../../engine/engine.dart';
 import 'input/keyboard_handler.dart';
+import 'input/touch_controls.dart';
 import 'painters/board_painter.dart';
 import 'painters/pieces_painter.dart';
 import 'widgets/panel_box.dart';
@@ -45,6 +48,17 @@ class _GamePageState extends State<GamePage>
   final FocusNode _focus = FocusNode();
   Duration _last = Duration.zero;
 
+  static const String _keyboardHint =
+      '← → / A D  move    ↓ / S  soft drop    Space  hard drop\n'
+      '↑ / X  rotate    Z  rotate back    C  hold    P  pause    R  restart';
+  static const String _touchHint =
+      'Tap left / right: rotate    Drag: move & soft drop\n'
+      'Flick down: hard drop    Tap HOLD: hold piece';
+
+  static bool get _isTouch =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
   static List<Tetromino> _pickHeld(GameEngine e) {
     final held = e.held;
     return held == null ? const <Tetromino>[] : [held];
@@ -80,6 +94,10 @@ class _GamePageState extends State<GamePage>
           autofocus: true,
           focusNode: _focus,
           onKeyEvent: (_, event) => handleGameKey(_engine, event),
+          // A key-up is never delivered if the window loses focus mid-press.
+          onFocusChange: (hasFocus) {
+            if (!hasFocus) _engine.releaseInputs();
+          },
           child: Padding(
             padding: EdgeInsets.all(12.r),
             child: Column(
@@ -89,8 +107,7 @@ class _GamePageState extends State<GamePage>
                 Expanded(child: _playfield()),
                 SizedBox(height: 8.h),
                 Text(
-                  '← →  move    ↓  soft drop    Space  hard drop\n'
-                  '↑ / X  rotate    Z  rotate back    C  hold    R  restart',
+                  _isTouch ? _touchHint : _keyboardHint,
                   textAlign: TextAlign.center,
                   style: TextStyle(color: GameColors.textDim, fontSize: 11.sp),
                 ),
@@ -127,8 +144,12 @@ class _GamePageState extends State<GamePage>
                   SizedBox(
                     width: boardW,
                     height: boardH,
-                    child: RepaintBoundary(
-                      child: CustomPaint(painter: _boardPainter),
+                    child: TouchControls(
+                      engine: _engine,
+                      cellSize: cell,
+                      child: RepaintBoundary(
+                        child: CustomPaint(painter: _boardPainter),
+                      ),
                     ),
                   ),
                   SizedBox(width: gap),
@@ -142,11 +163,16 @@ class _GamePageState extends State<GamePage>
 
   Widget _leftPanel(double width) => Column(
         children: [
-          PanelBox(
-            label: 'HOLD',
-            child: SizedBox(
-              height: PiecesPainter.heightFor(width, 1),
-              child: CustomPaint(painter: _holdPainter),
+          // Phase 10: tapping the HOLD box swaps the piece.
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _engine.holdPiece,
+            child: PanelBox(
+              label: 'HOLD',
+              child: SizedBox(
+                height: PiecesPainter.heightFor(width, 1),
+                child: CustomPaint(painter: _holdPainter),
+              ),
             ),
           ),
           SizedBox(height: 16.h),
@@ -155,6 +181,8 @@ class _GamePageState extends State<GamePage>
             builder: (_, __) => Column(
               children: [
                 StatTile(label: 'SCORE', value: '${_engine.score}'),
+                SizedBox(height: 12.h),
+                StatTile(label: 'LEVEL', value: '${_engine.level}'),
                 SizedBox(height: 12.h),
                 StatTile(label: 'LINES', value: '${_engine.lines}'),
               ],
@@ -194,7 +222,7 @@ class _Header extends StatelessWidget {
           listenable: engine,
           builder: (_, __) => Text(
             engine.phase == GamePhase.over
-                ? 'GAME OVER - press R'
+                ? 'GAME OVER - tap the board or press R'
                 : engine.phase.name.toUpperCase(),
             style: TextStyle(color: GameColors.textDim, fontSize: 12.sp),
           ),
