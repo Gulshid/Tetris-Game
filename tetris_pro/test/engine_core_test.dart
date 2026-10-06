@@ -119,14 +119,14 @@ void main() {
       expect(e.current!.y, 1);
     });
 
-    test('piece stops at the floor and never leaves the board', () {
+    test('a piece that reaches the floor locks into the board', () {
       final e = GameEngine(seed: 7)..start();
-      for (var i = 0; i < 1200; i++) {
-        e.update(0.05); // 60 s
+      for (var i = 0; i < 600; i++) {
+        e.update(0.05); // 30 s: first piece lands at ~21 s and locks
       }
-      final p = e.current!;
-      expect(e.board.collides(p), false);
-      expect(e.board.collides(p.shifted(0, 1)), true);
+      expect(e.board.isEmpty, false);
+      expect(e.phase, GamePhase.playing);
+      expect(e.board.collides(e.current!), false);
     });
 
     test('engine starts in the ready phase', () {
