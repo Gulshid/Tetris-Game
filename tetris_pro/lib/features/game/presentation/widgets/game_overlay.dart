@@ -198,7 +198,9 @@ class _OverlayContent extends StatelessWidget {
           ),
         ],
         SizedBox(height: u * .7),
-        DecoratedBox(
+        SizedBox(
+          width: double.infinity,
+          child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: GameColors.brand,
             borderRadius: BorderRadius.circular(u * .5),
@@ -216,7 +218,7 @@ class _OverlayContent extends StatelessWidget {
               shadowColor: Colors.transparent,
               foregroundColor: const Color(0xFF05070F),
               padding: EdgeInsets.symmetric(
-                horizontal: u * 1.2,
+                horizontal: u * .8,
                 vertical: u * .55,
               ),
               shape: RoundedRectangleBorder(
@@ -228,14 +230,19 @@ class _OverlayContent extends StatelessWidget {
                 letterSpacing: 1.5,
               ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: u * .95),
-                SizedBox(width: u * .25),
-                Text(label),
-              ],
+            // FittedBox scales the content down instead of overflowing.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: u * .95),
+                  SizedBox(width: u * .25),
+                  Text(label, maxLines: 1, softWrap: false),
+                ],
+              ),
             ),
+          ),
           ),
         ),
         if (showKeyHint) ...[
