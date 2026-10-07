@@ -36,7 +36,7 @@ final Set<LogicalKeyboardKey> _pauseKeys = {
   LogicalKeyboardKey.escape,
 };
 
-/// Phase 9 key mapping.
+/// Keyboard mapping (Phase 9, Enter added in Phase 12).
 ///
 /// | Action        | Keys                       |
 /// |---------------|----------------------------|
@@ -48,6 +48,7 @@ final Set<LogicalKeyboardKey> _pauseKeys = {
 /// | Hold          | C, Shift                   |
 /// | Pause         | P, Esc                     |
 /// | Restart       | R                          |
+/// | Start/Resume  | Enter                      |
 ///
 /// Left/Right and Down are *held* keys: key-down and key-up are both sent to
 /// the engine, and the engine does DAS/ARR itself. The OS key repeat events
@@ -88,7 +89,18 @@ KeyEventResult handleGameKey(GameEngine engine, KeyEvent event) {
   } else if (_pauseKeys.contains(key)) {
     engine.togglePause();
   } else if (key == LogicalKeyboardKey.keyR) {
-    engine.start(); // temporary restart (Phase 12 adds overlays)
+    engine.start();
+  } else if (key == LogicalKeyboardKey.enter ||
+      key == LogicalKeyboardKey.numpadEnter) {
+    // Same as pressing the overlay button.
+    final phase = engine.phase;
+    if (phase == GamePhase.ready || phase == GamePhase.over) {
+      engine.start();
+    } else if (phase == GamePhase.paused) {
+      engine.togglePause();
+    } else {
+      return KeyEventResult.ignored;
+    }
   } else {
     return KeyEventResult.ignored;
   }
