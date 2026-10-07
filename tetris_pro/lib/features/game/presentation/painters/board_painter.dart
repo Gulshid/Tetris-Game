@@ -6,8 +6,8 @@ import '../../../../core/theme/game_colors.dart';
 import '../../../../engine/engine.dart';
 import 'block_renderer.dart';
 
-/// Paints the playfield: background, grid, locked blocks, the ghost piece
-/// and the active piece. It listens to the engine directly, so only the
+/// Paints the playfield: background, grid, locked blocks, the line-clear
+/// flash, the ghost piece and the active piece. It listens to the engine directly, so only the
 /// canvas repaints, never the widget tree.
 class BoardPainter extends CustomPainter {
   BoardPainter(this.engine) : super(repaint: engine);
@@ -20,6 +20,7 @@ class BoardPainter extends CustomPainter {
     ..color = GameColors.grid
     ..strokeWidth = 1;
   final Paint _ghostPaint = Paint()..style = PaintingStyle.stroke;
+  final Paint _flashPaint = Paint();
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -45,6 +46,20 @@ class BoardPainter extends CustomPainter {
         if (value != 0) {
           _blocks.draw(canvas, x * cell, (y - hiddenRows) * cell, value - 1);
         }
+      }
+    }
+
+    // Line-clear flash: the full rows pulse white while they are removed.
+    final clearing = engine.clearingRows;
+    if (clearing.isNotEmpty) {
+      final pulse = math.sin(engine.clearProgress * math.pi).clamp(0.0, 1.0);
+      _flashPaint.color = Colors.white.withValues(alpha: pulse.toDouble() * .9);
+      for (final y in clearing) {
+        if (y < hiddenRows) continue;
+        canvas.drawRect(
+          Rect.fromLTWH(0, (y - hiddenRows) * cell, size.width, cell),
+          _flashPaint,
+        );
       }
     }
 
