@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
@@ -7,6 +8,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
+import '../../../core/storage/high_score_keeper.dart';
+import '../../../core/storage/high_score_store.dart';
 import '../../../core/theme/game_colors.dart';
 import '../../../engine/engine.dart';
 import 'input/keyboard_handler.dart';
@@ -23,8 +26,12 @@ import 'widgets/stat_tile.dart';
 ///   their sizes from it, so the layout always fits (phone, tablet, desktop).
 /// - ScreenUtil (.sp .h .w .r) sizes text, gaps and padding.
 /// - The game starts from the READY overlay (START button / Enter / tap).
+/// - The best score is loaded at start-up and saved when a game ends.
 class GamePage extends StatefulWidget {
-  const GamePage({super.key});
+  /// [store] defaults to `shared_preferences`; pass a fake in tests.
+  const GamePage({super.key, this.store});
+
+  final HighScoreStore? store;
 
   @override
   State<GamePage> createState() => _GamePageState();
@@ -49,6 +56,10 @@ class _GamePageState extends State<GamePage>
       defaultTargetPlatform == TargetPlatform.iOS;
 
   final GameEngine _engine = GameEngine();
+  late final HighScoreKeeper _keeper = HighScoreKeeper(
+    engine: _engine,
+    store: widget.store ?? const SharedPrefsHighScoreStore(),
+  );
   late final BoardPainter _boardPainter = BoardPainter(_engine);
   late final PiecesPainter _holdPainter = PiecesPainter(
     engine: _engine,
@@ -73,6 +84,7 @@ class _GamePageState extends State<GamePage>
     super.initState();
     _engine.onEvent = _onEvent;
     _engine.addListener(_keepKeyboardFocus);
+    unawaited(_keeper.load()); // fills BEST when the saved value arrives
     _ticker = createTicker(_onTick)..start();
     // No auto-start: the READY overlay shows a START button.
   }
@@ -102,6 +114,7 @@ class _GamePageState extends State<GamePage>
         HapticFeedback.mediumImpact();
       case GameEvent.over:
         HapticFeedback.heavyImpact();
+        unawaited(_keeper.saveIfNewBest());
     }
   }
 
@@ -109,6 +122,7 @@ class _GamePageState extends State<GamePage>
   void dispose() {
     _engine.onEvent = null;
     _engine.removeListener(_keepKeyboardFocus);
+    _keeper.dispose();
     _ticker.dispose();
     _focus.dispose();
     _engine.dispose();
