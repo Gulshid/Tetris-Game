@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../../core/theme/game_colors.dart';
@@ -12,6 +13,8 @@ import 'input/keyboard_handler.dart';
 import 'input/touch_controls.dart';
 import 'painters/board_painter.dart';
 import 'painters/pieces_painter.dart';
+import 'widgets/banner_text.dart';
+import 'widgets/game_overlay.dart';
 import 'widgets/panel_box.dart';
 import 'widgets/stat_tile.dart';
 
@@ -19,6 +22,7 @@ import 'widgets/stat_tile.dart';
 /// - LayoutBuilder works out one cell size; board and side panels derive
 ///   their sizes from it, so the layout always fits (phone, tablet, desktop).
 /// - ScreenUtil (.sp .h .w .r) sizes text, gaps and padding.
+/// - The game starts from the READY overlay (START button / Enter / tap).
 class GamePage extends StatefulWidget {
   const GamePage({super.key});
 
@@ -32,6 +36,17 @@ class _GamePageState extends State<GamePage>
 
   /// Side panel width measured in board cells.
   static const double _panelCells = 3.2;
+
+  static const String _keyboardHint =
+      '← → / A D  move    ↓ / S  soft drop    Space  hard drop\n'
+      '↑ / X  rotate    Z  rotate back    C  hold    P  pause    R  restart';
+  static const String _touchHint =
+      'Tap left / right: rotate    Drag: move & soft drop\n'
+      'Flick down: hard drop    Tap HOLD: hold piece';
+
+  static bool get _isTouch =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
 
   final GameEngine _engine = GameEngine();
   late final BoardPainter _boardPainter = BoardPainter(_engine);
@@ -48,17 +63,6 @@ class _GamePageState extends State<GamePage>
   final FocusNode _focus = FocusNode();
   Duration _last = Duration.zero;
 
-  static const String _keyboardHint =
-      '← → / A D  move    ↓ / S  soft drop    Space  hard drop\n'
-      '↑ / X  rotate    Z  rotate back    C  hold    P  pause    R  restart';
-  static const String _touchHint =
-      'Tap left / right: rotate    Drag: move & soft drop\n'
-      'Flick down: hard drop    Tap HOLD: hold piece';
-
-  static bool get _isTouch =>
-      defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS;
-
   static List<Tetromino> _pickHeld(GameEngine e) {
     final held = e.held;
     return held == null ? const <Tetromino>[] : [held];
@@ -67,8 +71,10 @@ class _GamePageState extends State<GamePage>
   @override
   void initState() {
     super.initState();
+    _engine.onEvent = _onEvent;
+    _engine.addListener(_keepKeyboardFocus);
     _ticker = createTicker(_onTick)..start();
-    _engine.start();
+    // No auto-start: the READY overlay shows a START button.
   }
 
   void _onTick(Duration elapsed) {
@@ -77,8 +83,32 @@ class _GamePageState extends State<GamePage>
     _engine.update(dt); // engine clamps big frame gaps
   }
 
+  /// Clicking an overlay button can leave keyboard focus on that button.
+  /// Once the game is running, give it back so the arrow keys work.
+  void _keepKeyboardFocus() {
+    if (_engine.phase == GamePhase.playing && !_focus.hasPrimaryFocus) {
+      _focus.requestFocus();
+    }
+  }
+
+  /// Haptic feedback for engine events.
+  void _onEvent(GameEvent event) {
+    switch (event) {
+      case GameEvent.rotate:
+        HapticFeedback.selectionClick();
+      case GameEvent.drop:
+        HapticFeedback.lightImpact();
+      case GameEvent.clear:
+        HapticFeedback.mediumImpact();
+      case GameEvent.over:
+        HapticFeedback.heavyImpact();
+    }
+  }
+
   @override
   void dispose() {
+    _engine.onEvent = null;
+    _engine.removeListener(_keepKeyboardFocus);
     _ticker.dispose();
     _focus.dispose();
     _engine.dispose();
@@ -102,7 +132,7 @@ class _GamePageState extends State<GamePage>
             padding: EdgeInsets.all(12.r),
             child: Column(
               children: [
-                _Header(engine: _engine),
+                const _Header(),
                 SizedBox(height: 8.h),
                 Expanded(child: _playfield()),
                 SizedBox(height: 8.h),
@@ -144,12 +174,21 @@ class _GamePageState extends State<GamePage>
                   SizedBox(
                     width: boardW,
                     height: boardH,
-                    child: TouchControls(
-                      engine: _engine,
-                      cellSize: cell,
-                      child: RepaintBoundary(
-                        child: CustomPaint(painter: _boardPainter),
-                      ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        TouchControls(
+                          engine: _engine,
+                          cellSize: cell,
+                          child: RepaintBoundary(
+                            child: CustomPaint(painter: _boardPainter),
+                          ),
+                        ),
+                        BannerText(engine: _engine),
+                        // Last, so it covers (and blocks touches to) the
+                        // board while READY, PAUSED or GAME OVER.
+                        GameOverlay(engine: _engine),
+                      ],
                     ),
                   ),
                   SizedBox(width: gap),
@@ -163,7 +202,7 @@ class _GamePageState extends State<GamePage>
 
   Widget _leftPanel(double width) => Column(
         children: [
-          // Phase 10: tapping the HOLD box swaps the piece.
+          // Tapping the HOLD box swaps the piece (touch control).
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _engine.holdPiece,
@@ -182,6 +221,8 @@ class _GamePageState extends State<GamePage>
               children: [
                 StatTile(label: 'SCORE', value: '${_engine.score}'),
                 SizedBox(height: 12.h),
+                StatTile(label: 'BEST', value: '${_engine.best}'),
+                SizedBox(height: 12.h),
                 StatTile(label: 'LEVEL', value: '${_engine.level}'),
                 SizedBox(height: 12.h),
                 StatTile(label: 'LINES', value: '${_engine.lines}'),
@@ -191,43 +232,50 @@ class _GamePageState extends State<GamePage>
         ],
       );
 
-  Widget _rightPanel(double width) => PanelBox(
-        label: 'NEXT',
-        child: SizedBox(
-          height: PiecesPainter.heightFor(width, _nextSlots),
-          child: CustomPaint(painter: _nextPainter),
-        ),
+  Widget _rightPanel(double width) => Column(
+        children: [
+          PanelBox(
+            label: 'NEXT',
+            child: SizedBox(
+              height: PiecesPainter.heightFor(width, _nextSlots),
+              child: CustomPaint(painter: _nextPainter),
+            ),
+          ),
+          SizedBox(height: 16.h),
+          ListenableBuilder(
+            listenable: _engine,
+            builder: (_, __) {
+              final phase = _engine.phase;
+              final paused = phase == GamePhase.paused;
+              final canToggle = paused ||
+                  phase == GamePhase.playing ||
+                  phase == GamePhase.clearing;
+              return IconButton.filledTonal(
+                tooltip: paused ? 'Resume' : 'Pause',
+                onPressed: canToggle ? _engine.togglePause : null,
+                icon: Icon(
+                  paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                ),
+              );
+            },
+          ),
+        ],
       );
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.engine});
-
-  final GameEngine engine;
+  const _Header();
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          'TETRIS PRO',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 22.sp,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 3,
-          ),
-        ),
-        ListenableBuilder(
-          listenable: engine,
-          builder: (_, __) => Text(
-            engine.phase == GamePhase.over
-                ? 'GAME OVER - tap the board or press R'
-                : engine.phase.name.toUpperCase(),
-            style: TextStyle(color: GameColors.textDim, fontSize: 12.sp),
-          ),
-        ),
-      ],
+    return Text(
+      'TETRIS PRO',
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: 22.sp,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 3,
+      ),
     );
   }
 }
