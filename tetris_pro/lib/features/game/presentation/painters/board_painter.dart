@@ -6,37 +6,54 @@ import '../../../../core/theme/game_colors.dart';
 import '../../../../engine/engine.dart';
 import 'block_renderer.dart';
 
-/// Paints the playfield: background, grid, locked blocks, the line-clear
-/// flash, the ghost piece and the active piece. It listens to the engine directly, so only the
-/// canvas repaints, never the widget tree.
+/// Paints the playfield: background, grid dots, locked blocks, the line-clear
+/// flash, the ghost piece and the active piece (with a soft glow). It listens
+/// to the engine directly, so only the canvas repaints, never the widget tree.
 class BoardPainter extends CustomPainter {
   BoardPainter(this.engine) : super(repaint: engine);
 
   final GameEngine engine;
   final BlockRenderer _blocks = BlockRenderer();
 
-  static final Paint _background = Paint()..color = GameColors.boardFill;
-  static final Paint _gridPaint = Paint()
-    ..color = GameColors.grid
-    ..strokeWidth = 1;
-  final Paint _ghostPaint = Paint()..style = PaintingStyle.stroke;
+  final Paint _backgroundPaint = Paint();
+  final Paint _dotPaint = Paint()..color = GameColors.gridDot;
+  final Paint _ghostStroke = Paint()..style = PaintingStyle.stroke;
+  final Paint _ghostFill = Paint();
+  final Paint _glowPaint = Paint();
   final Paint _flashPaint = Paint();
+
+  Size _preparedSize = Size.zero;
+  double _dotRadius = 1;
+
+  void _prepare(Size size) {
+    if (size == _preparedSize) return;
+    _preparedSize = size;
+    final cell = size.width / boardCols;
+    _backgroundPaint.shader = const LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [GameColors.boardFillTop, GameColors.boardFill],
+    ).createShader(Offset.zero & size);
+    _glowPaint.maskFilter = MaskFilter.blur(BlurStyle.normal, cell * .32);
+    _dotRadius = math.max(.8, cell * .035);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final cell = size.width / boardCols;
     _blocks.prepare(cell);
+    _prepare(size);
 
     canvas.drawRRect(
       RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(cell * .35)),
-      _background,
+      _backgroundPaint,
     );
 
+    // Grid: a dot at every inner corner is calmer than full lines.
     for (var c = 1; c < boardCols; c++) {
-      canvas.drawLine(Offset(c * cell, 0), Offset(c * cell, size.height), _gridPaint);
-    }
-    for (var r = 1; r < visibleRows; r++) {
-      canvas.drawLine(Offset(0, r * cell), Offset(size.width, r * cell), _gridPaint);
+      for (var r = 1; r < visibleRows; r++) {
+        canvas.drawCircle(Offset(c * cell, r * cell), _dotRadius, _dotPaint);
+      }
     }
 
     final board = engine.board;
@@ -49,17 +66,22 @@ class BoardPainter extends CustomPainter {
       }
     }
 
-    // Line-clear flash: the full rows pulse white while they are removed.
+    // Line-clear flash: full rows pulse white-hot in the middle.
     final clearing = engine.clearingRows;
     if (clearing.isNotEmpty) {
-      final pulse = math.sin(engine.clearProgress * math.pi).clamp(0.0, 1.0);
-      _flashPaint.color = Colors.white.withValues(alpha: pulse.toDouble() * .9);
+      final pulse =
+          math.sin(engine.clearProgress * math.pi).clamp(0.0, 1.0).toDouble();
       for (final y in clearing) {
         if (y < hiddenRows) continue;
-        canvas.drawRect(
-          Rect.fromLTWH(0, (y - hiddenRows) * cell, size.width, cell),
-          _flashPaint,
-        );
+        final rect = Rect.fromLTWH(0, (y - hiddenRows) * cell, size.width, cell);
+        _flashPaint.shader = LinearGradient(
+          colors: [
+            Colors.white.withValues(alpha: pulse * .45),
+            Colors.white.withValues(alpha: pulse * .95),
+            Colors.white.withValues(alpha: pulse * .45),
+          ],
+        ).createShader(rect);
+        canvas.drawRect(rect, _flashPaint);
       }
     }
 
@@ -69,9 +91,11 @@ class BoardPainter extends CustomPainter {
     // Ghost first, so the active piece is drawn on top of it.
     final ghost = engine.ghost;
     if (ghost != null && ghost.y != piece.y) {
-      _ghostPaint
+      final color = piece.type.color;
+      _ghostStroke
         ..strokeWidth = math.max(1.5, cell * .07)
-        ..color = piece.type.color.withValues(alpha: .45);
+        ..color = color.withValues(alpha: .55);
+      _ghostFill.color = color.withValues(alpha: .10);
       final radius = Radius.circular(cell * .16);
       for (final c in ghost.cells) {
         if (c.y < hiddenRows) continue;
@@ -81,8 +105,27 @@ class BoardPainter extends CustomPainter {
           cell,
           cell,
         ).deflate(cell * .1);
-        canvas.drawRRect(RRect.fromRectAndRadius(rect, radius), _ghostPaint);
+        final rrect = RRect.fromRectAndRadius(rect, radius);
+        canvas
+          ..drawRRect(rrect, _ghostFill)
+          ..drawRRect(rrect, _ghostStroke);
       }
+    }
+
+    // Soft halo under the active piece.
+    _glowPaint.color = piece.type.color.withValues(alpha: .5);
+    for (final c in piece.cells) {
+      if (c.y < hiddenRows) continue;
+      final rect = Rect.fromLTWH(
+        c.x * cell,
+        (c.y - hiddenRows) * cell,
+        cell,
+        cell,
+      ).inflate(cell * .06);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(cell * .22)),
+        _glowPaint,
+      );
     }
 
     for (final c in piece.cells) {
