@@ -11,3 +11,7 @@ typedef Cell = ({int x, int y});
 
 /// High level state of a game session.
 enum GamePhase { ready, playing, clearing, paused, over }
+
+/// One-shot things that happened in the engine. The UI maps them to haptics
+/// (and, later, sounds) without the engine knowing about either.
+enum GameEvent { rotate, drop, clear, over }

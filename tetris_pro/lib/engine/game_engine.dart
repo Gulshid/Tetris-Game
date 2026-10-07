@@ -6,6 +6,7 @@ import 'board.dart';
 import 'constants.dart';
 import 'piece.dart';
 import 'piece_generator.dart';
+import 'scoring.dart';
 import 'srs_kicks.dart';
 import 'tetromino.dart';
 
@@ -39,6 +40,16 @@ class GameEngine extends ChangeNotifier {
 
   /// Successful moves/rotations that may restart the lock timer per piece.
   static const int maxLockResets = 15;
+
+  // Phase 12: line-clear animation and banners
+  /// Seconds the cleared rows flash before they are removed.
+  static const double clearDuration = 0.32;
+
+  /// Seconds a banner such as "TETRIS" stays on screen.
+  static const double bannerDuration = 1.6;
+
+  /// The banner fades out during its last this-many seconds.
+  static const double bannerFadeTime = 0.6;
 
   // Phase 9: DAS / ARR and levels
   /// Default Delayed Auto Shift: seconds a direction is held before it repeats.
@@ -100,6 +111,54 @@ class GameEngine extends ChangeNotifier {
   /// Seconds between repeated moves after DAS. 0 = instant slide.
   double arr = defaultArr;
 
+  // Phase 11: scoring state
+  int _combo = -1;
+  bool _backToBack = false;
+
+  // Phase 12: feedback state
+  int _best = 0;
+  bool _newBest = false;
+  String _banner = '';
+  double _bannerTimer = 0;
+  List<int> _clearRows = const [];
+  double _clearTimer = 0;
+  GamePhase _resumePhase = GamePhase.playing; // phase restored after pause
+
+  /// Called for every [GameEvent]. Set by the UI for haptics and sound.
+  void Function(GameEvent event)? onEvent;
+
+  /// Consecutive line-clearing locks minus one (-1 = no combo running).
+  int get combo => _combo;
+
+  /// True if the next Tetris / T-spin clear will earn the 1.5x bonus.
+  bool get backToBack => _backToBack;
+
+  /// Highest score reached. The UI loads and saves it (Phase 13).
+  int get best => _best;
+  set best(int value) {
+    _best = value;
+    notifyListeners();
+  }
+
+  /// True when the game that just ended beat the previous best.
+  bool get newBest => _newBest;
+
+  /// Text of the current banner ("TETRIS", "T-SPIN DOUBLE\nBACK-TO-BACK"...),
+  /// or '' once it has expired.
+  String get banner => _bannerTimer > 0 ? _banner : '';
+
+  /// 1 while the banner is fully visible, fading to 0 as it expires.
+  double get bannerFade =>
+      _bannerTimer <= 0 ? 0 : math.min(1, _bannerTimer / bannerFadeTime);
+
+  /// Board rows being flashed before removal (empty outside a clear).
+  List<int> get clearingRows => _clearRows;
+
+  /// 0..1 progress of the line-clear animation.
+  double get clearProgress => _clearRows.isEmpty
+      ? 0
+      : (1 - _clearTimer / clearDuration).clamp(0.0, 1.0);
+
   /// Current level: one more for every [linesPerLevel] lines.
   int get level => _lines ~/ linesPerLevel + 1;
 
@@ -119,8 +178,8 @@ class GameEngine extends ChangeNotifier {
   /// Total lines cleared this game.
   int get lines => _lines;
 
-  /// Current score (soft drop and hard drop points for now; Phase 11 adds
-  /// line clears, combos and T-spins).
+  /// Current score: soft/hard drop points, line clears, T-spins, combos and
+  /// back-to-back bonuses (see [Scoring]).
   int get score => _score;
 
   /// True while the soft drop key is held. Set from the input layer.
@@ -148,6 +207,10 @@ class GameEngine extends ChangeNotifier {
 
   bool get _isActive => _phase == GamePhase.playing && _current != null;
 
+  /// The simulation advances while playing and during the clear animation.
+  bool get _isRunning =>
+      _phase == GamePhase.playing || _phase == GamePhase.clearing;
+
   /// True if the current piece rests on the floor or the stack.
   bool get _isGrounded => _board.collides(_current!.shifted(0, 1));
 
@@ -170,17 +233,27 @@ class GameEngine extends ChangeNotifier {
     _accumulator = 0;
     _gravityTimer = 0;
     releaseInputs();
+    _combo = -1;
+    _backToBack = false;
+    _newBest = false;
+    _banner = '';
+    _bannerTimer = 0;
+    _clearRows = const [];
+    _clearTimer = 0;
     _phase = GamePhase.playing;
     _spawn();
     notifyListeners();
   }
 
-  /// Pauses a running game or resumes a paused one. Ignored in other phases.
+  /// Pauses a running game or resumes a paused one. Pausing during the
+  /// line-clear animation is fine: the animation continues on resume.
+  /// Ignored before the first start and after game over.
   void togglePause() {
-    if (_phase == GamePhase.playing) {
+    if (_phase == GamePhase.playing || _phase == GamePhase.clearing) {
+      _resumePhase = _phase;
       _phase = GamePhase.paused;
     } else if (_phase == GamePhase.paused) {
-      _phase = GamePhase.playing;
+      _phase = _resumePhase;
     } else {
       return;
     }
@@ -189,10 +262,10 @@ class GameEngine extends ChangeNotifier {
 
   /// Advances the simulation by [dt] seconds (call once per frame).
   void update(double dt) {
-    if (!_isActive) return;
+    if (!_isRunning) return;
     _accumulator += math.min(math.max(dt, 0), maxFrame);
     var changed = false;
-    while (_accumulator >= fixedStep && _isActive) {
+    while (_accumulator >= fixedStep && _isRunning) {
       _accumulator -= fixedStep;
       changed |= _step(fixedStep);
     }
@@ -227,6 +300,7 @@ class GameEngine extends ChangeNotifier {
       );
       if (!_board.collides(candidate)) {
         _commit(candidate, rotated: true);
+        onEvent?.call(GameEvent.rotate);
         return true;
       }
     }
@@ -252,6 +326,7 @@ class GameEngine extends ChangeNotifier {
     _score += rows * hardDropPointsPerRow;
     if (rows > 0) _lastActionWasRotation = false;
     _current = landed;
+    onEvent?.call(GameEvent.drop);
     _lockPiece();
     notifyListeners();
     return true;
@@ -379,6 +454,31 @@ class GameEngine extends ChangeNotifier {
 
   /// One fixed simulation step. Returns true if visible state changed.
   bool _step(double dt) {
+    var changed = false;
+    if (_bannerTimer > 0) {
+      _bannerTimer = math.max(0, _bannerTimer - dt);
+      changed = true;
+    }
+    if (_phase == GamePhase.clearing) {
+      _advanceClear(dt);
+      return true;
+    }
+    return _stepPlaying(dt) || changed;
+  }
+
+  /// Counts down the flash, then removes the rows and spawns the next piece.
+  void _advanceClear(double dt) {
+    _clearTimer -= dt;
+    if (_clearTimer > 0) return;
+    _board = _board.removeRows(_clearRows);
+    _clearRows = const [];
+    _clearTimer = 0;
+    _phase = GamePhase.playing;
+    _spawn(); // may end the game
+  }
+
+  /// Gravity, lock delay and held-key repeat for one fixed step.
+  bool _stepPlaying(double dt) {
     final slid = _applyDas(dt);
 
     // Resting on something: no gravity, count down the lock delay instead.
@@ -413,7 +513,7 @@ class GameEngine extends ChangeNotifier {
     _lockResets = 0;
     _lowestY = piece.y;
     _lastActionWasRotation = false;
-    if (_board.collides(piece)) _phase = GamePhase.over;
+    if (_board.collides(piece)) _over();
   }
 
   /// Moves the piece one row down. False if blocked (floor or stack).
@@ -426,25 +526,102 @@ class GameEngine extends ChangeNotifier {
     return true;
   }
 
-  /// Writes the piece into the board, clears full rows and spawns the next.
+  /// Writes the piece into the board, scores it, and either spawns the next
+  /// piece or starts the line-clear animation.
   void _lockPiece() {
     final piece = _current!;
     final lockedInHiddenRows = piece.cells.every((c) => c.y < hiddenRows);
 
-    var next = _board.lock(piece);
-    final full = next.fullRows;
-    if (full.isNotEmpty) {
-      next = next.removeRows(full);
-      _lines += full.length;
-    }
-    _board = next;
+    // T-spin detection must look at the board BEFORE the piece is written.
+    final tSpin = Scoring.isTSpin(
+      _board,
+      piece,
+      lastActionWasRotation: _lastActionWasRotation,
+    );
+
+    final locked = _board.lock(piece);
+    final full = locked.fullRows;
+    _board = locked;
     _current = null;
 
-    // Lock out: the piece came to rest entirely above the visible field.
-    if (full.isEmpty && lockedInHiddenRows) {
-      _phase = GamePhase.over;
+    if (full.isEmpty) {
+      _combo = -1;
+      if (tSpin) {
+        _score += Scoring.base(lines: 0, tSpin: true) * level;
+        _say('T-SPIN');
+      }
+      // Lock out: the piece came to rest entirely above the visible field.
+      if (lockedInHiddenRows) {
+        _over();
+        return;
+      }
+      _spawn();
       return;
     }
-    _spawn();
+
+    _scoreClear(full.length, tSpin);
+    // Keep the full rows on the board while they flash; they are removed in
+    // _advanceClear when the timer ends.
+    _clearRows = full;
+    _clearTimer = clearDuration;
+    _phase = GamePhase.clearing;
+    onEvent?.call(GameEvent.clear);
+  }
+
+  /// Guideline scoring for a lock that cleared [n] rows (n >= 1).
+  void _scoreClear(int n, bool tSpin) {
+    final levelBefore = level;
+    final difficult = Scoring.isDifficult(lines: n, tSpin: tSpin);
+    final chained = difficult && _backToBack;
+
+    var points = Scoring.base(lines: n, tSpin: tSpin) * levelBefore;
+    if (chained) points = (points * Scoring.backToBackMultiplier).round();
+    _backToBack = difficult;
+
+    _combo++;
+    points += Scoring.comboStep * _combo * levelBefore;
+
+    _score += points;
+    _lines += n;
+
+    _say([
+      Scoring.label(lines: n, tSpin: tSpin),
+      if (chained) 'BACK-TO-BACK',
+      if (_combo > 0) 'COMBO x$_combo',
+      if (level > levelBefore) 'LEVEL $level',
+    ].join('\n'));
+  }
+
+  void _say(String text) {
+    _banner = text;
+    _bannerTimer = bannerDuration;
+  }
+
+  /// Ends the game and records the best score.
+  void _over() {
+    _phase = GamePhase.over;
+    _newBest = _score > _best;
+    if (_newBest) _best = _score;
+    onEvent?.call(GameEvent.over);
+  }
+
+  /// Test hook: puts the engine into an exact situation (a hand-built board,
+  /// a piece in a chosen spot, whether it was just rotated).
+  @visibleForTesting
+  void debugSetState({
+    Board? board,
+    Piece? current,
+    bool lastActionWasRotation = false,
+  }) {
+    if (board != null) _board = board;
+    if (current != null) {
+      _current = current;
+      _gravityTimer = 0;
+      _lockTimer = 0;
+      _lockResets = 0;
+      _lowestY = current.y;
+    }
+    _lastActionWasRotation = lastActionWasRotation;
+    notifyListeners();
   }
 }
