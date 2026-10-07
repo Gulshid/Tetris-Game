@@ -16,15 +16,21 @@ import 'input/keyboard_handler.dart';
 import 'input/touch_controls.dart';
 import 'painters/board_painter.dart';
 import 'painters/pieces_painter.dart';
+import 'widgets/ambient_background.dart';
 import 'widgets/banner_text.dart';
+import 'widgets/control_hints.dart';
 import 'widgets/game_overlay.dart';
+import 'widgets/level_accent.dart';
 import 'widgets/panel_box.dart';
 import 'widgets/stat_tile.dart';
+import 'widgets/status_chips.dart';
 
 /// Main game screen.
 /// - LayoutBuilder works out one cell size; board and side panels derive
 ///   their sizes from it, so the layout always fits (phone, tablet, desktop).
 /// - ScreenUtil (.sp .h .w .r) sizes text, gaps and padding.
+/// - Phones (< 600 px wide) get a stats strip above the board and slimmer
+///   side panels; larger screens keep the stats in the left panel.
 /// - The game starts from the READY overlay (START button / Enter / tap).
 /// - The best score is loaded at start-up and saved when a game ends.
 class GamePage extends StatefulWidget {
@@ -41,15 +47,8 @@ class _GamePageState extends State<GamePage>
     with SingleTickerProviderStateMixin {
   static const int _nextSlots = 5;
 
-  /// Side panel width measured in board cells.
-  static const double _panelCells = 3.2;
-
-  static const String _keyboardHint =
-      '← → / A D  move    ↓ / S  soft drop    Space  hard drop\n'
-      '↑ / X  rotate    Z  rotate back    C  hold    P  pause    R  restart';
-  static const String _touchHint =
-      'Tap left / right: rotate    Drag: move & soft drop\n'
-      'Flick down: hard drop    Tap HOLD: hold piece';
+  /// Width below which the compact (phone) layout is used.
+  static const double _compactWidth = 600;
 
   static bool get _isTouch =>
       defaultTargetPlatform == TargetPlatform.android ||
@@ -133,29 +132,37 @@ class _GamePageState extends State<GamePage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: GameColors.background,
-      body: SafeArea(
-        child: Focus(
-          autofocus: true,
-          focusNode: _focus,
-          onKeyEvent: (_, event) => handleGameKey(_engine, event),
-          // A key-up is never delivered if the window loses focus mid-press.
-          onFocusChange: (hasFocus) {
-            if (!hasFocus) _engine.releaseInputs();
-          },
-          child: Padding(
-            padding: EdgeInsets.all(12.r),
-            child: Column(
-              children: [
-                const _Header(),
-                SizedBox(height: 8.h),
-                Expanded(child: _playfield()),
-                SizedBox(height: 8.h),
-                Text(
-                  _isTouch ? _touchHint : _keyboardHint,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: GameColors.textDim, fontSize: 11.sp),
-                ),
-              ],
+      body: AmbientBackground(
+        engine: _engine,
+        child: SafeArea(
+          child: Focus(
+            autofocus: true,
+            focusNode: _focus,
+            onKeyEvent: (_, event) => handleGameKey(_engine, event),
+            // A key-up is never delivered if the window loses focus mid-press.
+            onFocusChange: (hasFocus) {
+              if (!hasFocus) _engine.releaseInputs();
+            },
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < _compactWidth;
+                return Padding(
+                  padding: EdgeInsets.all(12.r),
+                  child: Column(
+                    children: [
+                      _Header(engine: _engine),
+                      SizedBox(height: 10.h),
+                      if (compact) ...[
+                        _statsStrip(),
+                        SizedBox(height: 10.h),
+                      ],
+                      Expanded(child: _playfield(compact)),
+                      SizedBox(height: 8.h),
+                      ControlHints(touch: _isTouch),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -164,17 +171,18 @@ class _GamePageState extends State<GamePage>
   }
 
   /// [ left panel | board | right panel ], all sized from one cell size.
-  Widget _playfield() => LayoutBuilder(
+  Widget _playfield(bool compact) => LayoutBuilder(
         builder: (context, box) {
-          final gap = 8.w;
-          const double totalCells = boardCols + 2 * _panelCells;
+          final gap = 10.w;
+          final panelCells = compact ? 2.9 : 3.2;
+          final totalCells = boardCols + 2 * panelCells;
           final cell = math.min(
             (box.maxWidth - 2 * gap) / totalCells,
             box.maxHeight / visibleRows,
           );
           final boardW = cell * boardCols;
           final boardH = cell * visibleRows;
-          final panelW = cell * _panelCells;
+          final panelW = cell * panelCells;
 
           return Center(
             child: SizedBox(
@@ -183,14 +191,47 @@ class _GamePageState extends State<GamePage>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(width: panelW, child: _leftPanel(panelW)),
+                  SizedBox(
+                    width: panelW,
+                    child: _leftPanel(panelW, compact),
+                  ),
                   SizedBox(width: gap),
                   SizedBox(
                     width: boardW,
                     height: boardH,
                     child: Stack(
+                      clipBehavior: Clip.none,
                       fit: StackFit.expand,
                       children: [
+                        // Glowing frame, drawn just outside the board.
+                        Positioned(
+                          left: -4,
+                          top: -4,
+                          right: -4,
+                          bottom: -4,
+                          child: IgnorePointer(
+                            child: LevelAccent(
+                              engine: _engine,
+                              builder: (context, accent, _) => DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius:
+                                      BorderRadius.circular(cell * .5),
+                                  border: Border.all(
+                                    color: accent.withValues(alpha: .55),
+                                    width: 1.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: accent.withValues(alpha: .28),
+                                      blurRadius: cell * .9,
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                         TouchControls(
                           engine: _engine,
                           cellSize: cell,
@@ -201,7 +242,7 @@ class _GamePageState extends State<GamePage>
                         BannerText(engine: _engine),
                         // Last, so it covers (and blocks touches to) the
                         // board while READY, PAUSED or GAME OVER.
-                        GameOverlay(engine: _engine),
+                        GameOverlay(engine: _engine, showKeyHint: !_isTouch),
                       ],
                     ),
                   ),
@@ -214,7 +255,41 @@ class _GamePageState extends State<GamePage>
         },
       );
 
-  Widget _leftPanel(double width) => Column(
+  /// The four stat tiles, in display order.
+  List<Widget> _statTiles() => [
+        StatTile(label: 'SCORE', value: '${_engine.score}'),
+        StatTile(
+          label: 'BEST',
+          value: '${_engine.best}',
+          accent: GameColors.gold,
+        ),
+        StatTile(
+          label: 'LEVEL',
+          value: '${_engine.level}',
+          accent: GameColors.accentForLevel(_engine.level),
+          progress: (_engine.lines % GameEngine.linesPerLevel) /
+              GameEngine.linesPerLevel,
+        ),
+        StatTile(label: 'LINES', value: '${_engine.lines}'),
+      ];
+
+  /// Phone layout: the stats in one row above the board.
+  Widget _statsStrip() => ListenableBuilder(
+        listenable: _engine,
+        builder: (_, __) {
+          final tiles = _statTiles();
+          return Row(
+            children: [
+              for (var i = 0; i < tiles.length; i++) ...[
+                if (i > 0) SizedBox(width: 6.w),
+                Expanded(child: tiles[i]),
+              ],
+            ],
+          );
+        },
+      );
+
+  Widget _leftPanel(double width, bool compact) => Column(
         children: [
           // Tapping the HOLD box swaps the piece (touch control).
           GestureDetector(
@@ -222,27 +297,30 @@ class _GamePageState extends State<GamePage>
             onTap: _engine.holdPiece,
             child: PanelBox(
               label: 'HOLD',
+              accent: GameColors.accentAlt,
               child: SizedBox(
                 height: PiecesPainter.heightFor(width, 1),
                 child: CustomPaint(painter: _holdPainter),
               ),
             ),
           ),
-          SizedBox(height: 16.h),
-          ListenableBuilder(
-            listenable: _engine,
-            builder: (_, __) => Column(
-              children: [
-                StatTile(label: 'SCORE', value: '${_engine.score}'),
-                SizedBox(height: 12.h),
-                StatTile(label: 'BEST', value: '${_engine.best}'),
-                SizedBox(height: 12.h),
-                StatTile(label: 'LEVEL', value: '${_engine.level}'),
-                SizedBox(height: 12.h),
-                StatTile(label: 'LINES', value: '${_engine.lines}'),
-              ],
+          if (!compact) ...[
+            SizedBox(height: 16.h),
+            ListenableBuilder(
+              listenable: _engine,
+              builder: (_, __) {
+                final tiles = _statTiles();
+                return Column(
+                  children: [
+                    for (var i = 0; i < tiles.length; i++) ...[
+                      if (i > 0) SizedBox(height: 12.h),
+                      tiles[i],
+                    ],
+                  ],
+                );
+              },
             ),
-          ),
+          ],
         ],
       );
 
@@ -250,46 +328,151 @@ class _GamePageState extends State<GamePage>
         children: [
           PanelBox(
             label: 'NEXT',
+            accent: GameColors.accent,
             child: SizedBox(
               height: PiecesPainter.heightFor(width, _nextSlots),
               child: CustomPaint(painter: _nextPainter),
             ),
           ),
           SizedBox(height: 16.h),
-          ListenableBuilder(
-            listenable: _engine,
-            builder: (_, __) {
-              final phase = _engine.phase;
-              final paused = phase == GamePhase.paused;
-              final canToggle = paused ||
-                  phase == GamePhase.playing ||
-                  phase == GamePhase.clearing;
-              return IconButton.filledTonal(
-                tooltip: paused ? 'Resume' : 'Pause',
-                onPressed: canToggle ? _engine.togglePause : null,
-                icon: Icon(
-                  paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                ),
-              );
-            },
-          ),
+          StatusChips(engine: _engine),
         ],
       );
 }
 
+/// Brand bar: logo mark, gradient title, and the pause / restart buttons.
 class _Header extends StatelessWidget {
-  const _Header();
+  const _Header({required this.engine});
+
+  final GameEngine engine;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      'TETRIS PRO',
-      style: TextStyle(
-        color: Colors.white,
-        fontSize: 22.sp,
-        fontWeight: FontWeight.w900,
-        letterSpacing: 3,
+    return Row(
+      children: [
+        const _LogoMark(),
+        SizedBox(width: 10.w),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (rect) => GameColors.brand.createShader(rect),
+                child: Text(
+                  'TETRIS PRO',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22.sp,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        ListenableBuilder(
+          listenable: engine,
+          builder: (_, __) {
+            final phase = engine.phase;
+            final paused = phase == GamePhase.paused;
+            final canToggle = paused ||
+                phase == GamePhase.playing ||
+                phase == GamePhase.clearing;
+            final canRestart = phase != GamePhase.ready;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _HeaderButton(
+                  tooltip: 'Restart',
+                  icon: Icons.refresh_rounded,
+                  onPressed: canRestart ? engine.start : null,
+                ),
+                SizedBox(width: 8.w),
+                _HeaderButton(
+                  tooltip: paused ? 'Resume' : 'Pause',
+                  icon: paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                  onPressed: canToggle ? engine.togglePause : null,
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _HeaderButton extends StatelessWidget {
+  const _HeaderButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton.filledTonal(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      iconSize: 22.r,
+      icon: Icon(icon),
+      style: IconButton.styleFrom(
+        backgroundColor: GameColors.surfaceHigh,
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: GameColors.surface.withValues(alpha: .5),
+        disabledForegroundColor: GameColors.textFaint,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12.r),
+          side: const BorderSide(color: GameColors.border),
+        ),
       ),
+    );
+  }
+}
+
+/// Tiny T-tetromino built from the piece colours.
+class _LogoMark extends StatelessWidget {
+  const _LogoMark();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = 8.r;
+    Widget block(Color? color) => Container(
+          width: s,
+          height: s,
+          margin: EdgeInsets.all(1.r),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2.r),
+            boxShadow: color == null
+                ? null
+                : [BoxShadow(color: color.withValues(alpha: .6), blurRadius: 6)],
+          ),
+        );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [block(null), block(pieceColors[2]), block(null)],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            block(pieceColors[0]),
+            block(pieceColors[5]),
+            block(pieceColors[3]),
+          ],
+        ),
+      ],
     );
   }
 }
